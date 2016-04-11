@@ -1,0 +1,6 @@
+target
+.idea
+
+// Vim swap files
+[._]*.s[a-w][a-z]
+
