@@ -1,4 +1,4 @@
-package com.leebecker.sputilitybelt.ml.eval.com.leebecker.sputilitybelt.ml.eval.cluster
+package com.leebecker.sputilitybelt.ml.eval
 
 import java.util.UUID
 
@@ -14,17 +14,18 @@ case class SilhouetteMetrics(clusterCol: String, silhouetteCol: String, pointMet
     * Optionally takes a sample rate to produce the dataset ordered by cluster and silhouette value
     * This makes for easier plotting of the per cluster silhouette distributions as seen in
     * [[http://scikit-learn.org/stable/auto_examples/cluster/plot_kmeans_silhouette_analysis.html Scikit-Learn's silhouette analysis example]]
-    * @param sampleRate
+    *
+    * @param fraction - number from 0.0 to 1.0 indicating what percent of the data to sample
     * @return
     */
-  def prepareForViz(sampleRate: Option[Double]=None) = {
+  def prepareForViz(fraction: Option[Double]=None) = {
     // For visualization
     val windowSpec = Window.orderBy(clusterCol, silhouetteCol)
     val getIdx = row_number.over(windowSpec)
-    if (sampleRate.isEmpty)
+    if (fraction.isEmpty)
       pointMetrics.withColumn("idx", getIdx)
     else
-      pointMetrics.sample(true, sampleRate.get).withColumn("idx", getIdx)
+      pointMetrics.sample(withReplacement=true, fraction = fraction.get).withColumn("idx", getIdx)
   }
 
   /**
@@ -60,7 +61,7 @@ class Silhouette (
 
   /**
     * Computes silhouette metrics, both per point and per cluster
-    * @param df
+    * @param df - data frame containing cluster labels and feature vectors
     * @return
     */
   def compute(df: DataFrame): SilhouetteMetrics = {
