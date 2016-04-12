@@ -1,15 +1,13 @@
 package com.leebecker.sputilitybelt.ml.eval
 
-import org.apache.spark.annotation.{DeveloperApi, Since}
-
 import org.apache.spark.ml.evaluation.Evaluator
 import org.apache.spark.ml.param._
-import org.apache.spark.ml.param.shared._
 import org.apache.spark.ml.util.Identifiable
 import org.apache.spark.mllib.linalg.{Vector => mlVector, Vectors => mlVectors}
 import org.apache.spark.sql.DataFrame
 import org.apache.spark.sql.expressions.Window
 import org.apache.spark.sql.functions._
+
 
 case class SilhouetteMetrics(clusterCol: String, silhouetteCol: String, pointMetrics: DataFrame, clusterMetrics: DataFrame) {
 
@@ -34,7 +32,11 @@ case class SilhouetteMetrics(clusterCol: String, silhouetteCol: String, pointMet
   /**
     * Averages the silhouette score across all clusters
     */
-  lazy val silhouetteScore = clusterMetrics.select(mean(col(silhouetteCol)))
+  lazy val silhouetteScore = {
+    pointMetrics.cache()
+    clusterMetrics.cache()
+    clusterMetrics.select(mean(col(silhouetteCol))).first.getDouble(0)
+  }
 
 }
 
@@ -43,7 +45,7 @@ case class SilhouetteMetrics(clusterCol: String, silhouetteCol: String, pointMet
   * Utility class for computing silhouette metrics for a clustered dataset.  For details about the math and methodology
   * refer to the [[https://en.wikipedia.org/wiki/Silhouette_(clustering) Wikipedia entry on silhouette analysis]]
   */
-class Silhouette(override val uid: String) extends Evaluator {
+class SilhouetteEvaluator(override val uid: String) extends Evaluator {
 
   def this() = this(Identifiable.randomUID("silhouetteEval"))
 
@@ -86,26 +88,25 @@ class Silhouette(override val uid: String) extends Evaluator {
   val rowMax = udf((x: Double, y: Double) => math.max(x, y))
 
   /**
-    * Computes silhouette metrics, both per point and per cluster
+    * Computes silhouette metrics, per point,  per cluster and per dataset
     *
-    * @param df - data frame containing cluster labels and feature vectors
+    * @param dataset - data frame containing cluster labels and feature vectors
     * @return
     */
 
-  /*override*/ def evaluate(df: DataFrame): Double = {
-    import df.sqlContext.implicits._
+  override def evaluate(dataset: DataFrame): Double = {
 
     // Add unique ID if necessary
     // IDs are used for producing a cartesian product
-    val clustersDf = if (getGeneratedIds) df.withColumn(getIdCol, monotonicallyIncreasingId) else df
+    val clustersDf = if (getGeneratedIds) dataset.withColumn(getIdCol, monotonicallyIncreasingId) else dataset
 
     // Temporary columns used for computing silhouette scores
     val cluster2Col = s"${uid}_features2"
     val features2Col = s"${uid}_cluster2"
     val distanceCol = s"${uid}_distance"
     val dissimilarityCol = s"${uid}_dissimilarity"
-    val assignedDissimilarityCol = s"${uid}_assignedDissimilarity"
-    val neighborDissimilarityCol = s"${uid}_neighborDissimilarity"
+    val assignedDissimilarityCol = "assignedDissimilarity"
+    val neighborDissimilarityCol = "neighborDissimilarity"
 
     // Perform inefficient cartesian join to compute pairwise distances between points
     val df1 = clustersDf.select(col(getIdCol), col(getClusterCol), col(getFeaturesCol))
@@ -136,25 +137,11 @@ class Silhouette(override val uid: String) extends Evaluator {
     // Compute mean silhouette score per cluster
     val clusterSilhouetteScores = pointSilhouetteScores.groupBy(getClusterCol).agg(mean(col(silhouetteCol)).as(silhouetteCol))
 
-    val res =clusterSilhouetteScores.select(mean(silhouetteCol).as(silhouetteCol)).first()
-    this.silhouetteMetrics = SilhouetteMetrics(getClusterCol, silhouetteCol, pointSilhouetteScores, clusterSilhouetteScores)
-
-    res.getDouble(0)
+    this.metrics = SilhouetteMetrics(getClusterCol, silhouetteCol, pointSilhouetteScores, clusterSilhouetteScores)
+    this.metrics.silhouetteScore
   }
 
+  var metrics: SilhouetteMetrics = null
 
-
-  var silhouetteMetrics: SilhouetteMetrics = null
-
-  def copy(extra: ParamMap): Silhouette = defaultCopy(extra)
-}
-
-object Silhouette {
-  def create(clusterCol: String="cluster", featuresCol: String="features", idCol: String="id", generateIds: Boolean=false) = {
-    new Silhouette()
-      .setClusterCol(clusterCol)
-      .setFeaturesCol(featuresCol)
-      .setIdCol(idCol)
-      .setGenerateIds(generateIds)
-  }
+  def copy(extra: ParamMap): SilhouetteEvaluator = defaultCopy(extra)
 }
